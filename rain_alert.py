@@ -100,7 +100,39 @@ def send_line_message(message):
     res.raise_for_status()
 
 
-def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now):
+def get_fuel_prices():
+    """ดึงราคาน้ำมัน PTT: E20, B7 (ดีเซล), ดีเซล B20"""
+    try:
+        res = requests.get("https://api.chnwt.dev/thai-oil-api/latest", timeout=10)
+        res.raise_for_status()
+        data = res.json()
+        ptt = data.get("data", {}).get("ptt", {})
+        prices = {}
+        for item in ptt.values():
+            name = item.get("name", "")
+            price = item.get("price", "-")
+            if "E20" in name or "E20" in name.upper():
+                prices["E20"] = price
+            elif "B7" in name:
+                prices["B7"] = price
+            elif name in ("ดีเซล", "Diesel") and "B7" not in name and "B20" not in name:
+                prices["ดีเซล"] = price
+        return prices
+    except Exception as e:
+        print(f"  ⚠️ ดึงราคาน้ำมันไม่ได้: {e}")
+        return {}
+
+
+def fuel_price_lines(prices):
+    lines = ["⛽ ราคาน้ำมัน PTT วันนี้"]
+    label_map = {"E20": "แก๊สโซฮอล์ E20", "B7": "ดีเซล B7", "ดีเซล": "ดีเซล"}
+    for key in ["E20", "ดีเซล", "B7"]:
+        if key in prices:
+            lines.append(f"  • {label_map[key]}: {prices[key]} บ./ลิตร")
+    return lines
+
+
+def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices):
     rain_line = f"🌧 โอกาสฝน: {rain_now}% — {'ควรพกร่ม!' if rain_now >= RAIN_THRESHOLD else 'ไม่น่ามีฝน'}"
     next_line = f"⏭ ชั่วโมงถัดไป: {rain_next}%{' ⚠️' if rain_next >= RAIN_THRESHOLD else ''}"
     lines = [
@@ -113,6 +145,9 @@ def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, n
     ]
     if advice:
         lines.append(advice)
+    if fuel_prices:
+        lines.append(f"{'─' * 25}")
+        lines.extend(fuel_price_lines(fuel_prices))
     return "\n".join(lines)
 
 
@@ -179,6 +214,8 @@ def main():
     prev_rain_state = state.get("prev_rain", {})
     new_rain_state  = {}
 
+    fuel_prices = get_fuel_prices() if is_morning else {}
+
     mode = "รายงานเช้า" if is_morning else ("รายงานเย็น" if is_evening else f"รอบ {session_key}")
     print(f"[{now.strftime('%Y-%m-%d %H:%M')}] เริ่มเช็ค {len(CITIES)} เมือง ({mode})")
 
@@ -197,7 +234,7 @@ def main():
 
             # --- รายงานเช้า 07:00 ---
             if is_morning:
-                msg = build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now)
+                msg = build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices)
                 send_line_message(msg)
                 print(f"  ✅ {name}: ส่งรายงานเช้าแล้ว")
 
