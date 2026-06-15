@@ -1,0 +1,46 @@
+name: Rain Alert
+
+on:
+  schedule:
+    # รันทุกชั่วโมง (UTC+7 = บวก 7 จาก UTC)
+    # cron ใช้ UTC → ชั่วโมงไทย = UTC + 7
+    - cron: "0 * * * *"
+  workflow_dispatch:  # กดรันมือได้จาก GitHub UI
+
+jobs:
+  check-rain:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # โหลด state จาก cache (จำว่าแจ้งไปแล้วหรือยัง)
+      - name: Restore alert state
+        uses: actions/cache@v4
+        with:
+          path: alert_state.json
+          key: alert-state-${{ github.run_id }}
+          restore-keys: |
+            alert-state-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run rain alert
+        env:
+          LINE_CHANNEL_TOKEN: ${{ secrets.LINE_CHANNEL_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: python rain_alert.py
+
+      # บันทึก state กลับ
+      - name: Save alert state
+        uses: actions/cache@v4
+        with:
+          path: alert_state.json
+          key: alert-state-${{ github.run_id }}
