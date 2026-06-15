@@ -10,20 +10,21 @@ CITIES = [
     # เพิ่มเมืองได้ที่นี่
 ]
 
-RAIN_THRESHOLD = 10   # % โอกาสฝนที่จะแจ้งเตือน
-PM25_THRESHOLD = 50   # µg/m³ ระดับที่จะแจ้งเตือน (WHO: >15, มาตรฐานไทย: >50)
-LINE_TOKEN     = os.environ["LINE_CHANNEL_TOKEN"]
-LINE_USER_ID   = os.environ["LINE_USER_ID"]
-STATE_FILE     = "alert_state.json"
+RAIN_THRESHOLD  = 70  # % โอกาสฝนที่จะแจ้งเตือน
+PM25_THRESHOLD  = 50  # µg/m³ ระดับที่จะแจ้งเตือน
+MORNING_REPORT_HOUR = 7  # ส่งสรุปอากาศประจำวันเวลา 07:00
+LINE_TOKEN      = os.environ["LINE_CHANNEL_TOKEN"]
+LINE_USER_ID    = os.environ["LINE_USER_ID"]
+STATE_FILE      = "alert_state.json"
 # ==================
 
 PM25_LEVELS = [
-    (0,   15,  "ดีมาก 😊",   ""),
-    (15,  25,  "ดี 🟢",       ""),
-    (25,  50,  "ปานกลาง 🟡", ""),
-    (50,  75,  "เริ่มมีผล 🟠", "⚠️ ควรลดกิจกรรมกลางแจ้ง"),
-    (75,  150, "มีผลต่อสุขภาพ 🔴", "🚨 หลีกเลี่ยงกิจกรรมกลางแจ้ง"),
-    (150, 999, "อันตราย ☠️",  "🚨 อยู่ในอาคาร สวมหน้ากาก N95"),
+    (0,   15,  "ดีมาก 😊",            ""),
+    (15,  25,  "ดี 🟢",                ""),
+    (25,  50,  "ปานกลาง 🟡",          ""),
+    (50,  75,  "เริ่มมีผล 🟠",         "⚠️ ควรลดกิจกรรมกลางแจ้ง"),
+    (75,  150, "มีผลต่อสุขภาพ 🔴",    "🚨 หลีกเลี่ยงกิจกรรมกลางแจ้ง"),
+    (150, 999, "อันตราย ☠️",           "🚨 อยู่ในอาคาร สวมหน้ากาก N95"),
 ]
 
 
@@ -46,8 +47,6 @@ def get_session_key():
 
 
 def get_weather(lat, lon):
-    """ดึงโอกาสฝน + PM2.5 พร้อมกันในครั้งเดียว"""
-    # Rain probability
     rain_res = requests.get(
         "https://api.open-meteo.com/v1/forecast",
         params={
@@ -61,7 +60,6 @@ def get_weather(lat, lon):
     current_hour = datetime.now().hour
     rain_prob = rain_res.json()["hourly"]["precipitation_probability"][current_hour]
 
-    # PM2.5
     aqi_res = requests.get(
         "https://air-quality-api.open-meteo.com/v1/air-quality",
         params={
@@ -98,18 +96,50 @@ def send_line_message(message):
     res.raise_for_status()
 
 
+def build_morning_report(name, rain_prob, pm25, level_label, advice, now):
+    """สร้างข้อความสรุปอากาศประจำเช้า"""
+    rain_line = f"🌧 โอกาสฝน: {rain_prob}% — {'ควรพกร่ม!' if rain_prob >= RAIN_THRESHOLD else 'ไม่น่ามีฝน'}"
+    lines = [
+        f"🌅 สวัสดีตอนเช้า! สรุปอากาศวันนี้",
+        f"📍 {name} — {now.strftime('%d/%m/%Y %H:%M')} น.",
+        f"{'─' * 25}",
+        rain_line,
+        f"💨 PM2.5: {pm25} µg/m³ — {level_label}",
+    ]
+    if advice:
+        lines.append(advice)
+    return "\n".join(lines)
+
+
+def build_alert_message(name, rain_prob, pm25, level_label, advice, now):
+    """สร้างข้อความแจ้งเตือนฉุกเฉิน"""
+    period_label = "เช้า" if now.hour < 12 else "บ่าย/เย็น"
+    lines = [f"⚠️ แจ้งเตือน — {name}",
+             f"⏰ {now.strftime('%H:%M')} น. (รอบ{period_label})"]
+    if rain_prob >= RAIN_THRESHOLD:
+        lines.append(f"🌧 โอกาสฝน: {rain_prob}% → อย่าลืมพกร่ม!")
+    if pm25 >= PM25_THRESHOLD:
+        lines.append(f"💨 PM2.5: {pm25} µg/m³ — {level_label}")
+        if advice:
+            lines.append(advice)
+    return "\n".join(lines)
+
+
 def main():
     now = datetime.now()
+    is_morning_report = (now.hour == MORNING_REPORT_HOUR)
     session_key = get_session_key()
     state = load_state()
     alerted_this_session = state.get(session_key, [])
 
-    print(f"[{now.strftime('%Y-%m-%d %H:%M')}] เริ่มเช็ค {len(CITIES)} เมือง (รอบ {session_key})")
+    print(f"[{now.strftime('%Y-%m-%d %H:%M')}] เริ่มเช็ค {len(CITIES)} เมือง "
+          f"({'รายงานเช้า' if is_morning_report else f'รอบ {session_key}'})")
 
     for city in CITIES:
         name = city["name"]
 
-        if name in alerted_this_session:
+        # รอบปกติ: ถ้าแจ้งไปแล้วในรอบนี้ให้ข้าม (ยกเว้นรอบเช้า 7 โมงจะส่งเสมอ)
+        if not is_morning_report and name in alerted_this_session:
             print(f"  ⏭ {name}: แจ้งไปแล้วในรอบนี้ ข้าม")
             continue
 
@@ -118,23 +148,18 @@ def main():
             level_label, advice = pm25_label(pm25)
             print(f"  🌦 {name}: ฝน {rain_prob}% | PM2.5 {pm25} µg/m³ ({level_label})")
 
-            rain_alert = rain_prob >= RAIN_THRESHOLD
-            pm25_alert = pm25 >= PM25_THRESHOLD
-
-            if rain_alert or pm25_alert:
-                period_label = "เช้า" if now.hour < 12 else "บ่าย/เย็น"
-                lines = [f"📍 {name} — {now.strftime('%H:%M')} น. (รอบ{period_label})"]
-
-                if rain_alert:
-                    lines.append(f"🌧 โอกาสฝน: {rain_prob}%  → อย่าลืมพกร่ม!")
-
-                lines.append(f"💨 PM2.5: {pm25} µg/m³ — {level_label}")
-                if advice:
-                    lines.append(advice)
-
-                send_line_message("\n".join(lines))
-                alerted_this_session.append(name)
-                print(f"  ✅ {name}: ส่ง LINE แล้ว")
+            if is_morning_report:
+                msg = build_morning_report(name, rain_prob, pm25, level_label, advice, now)
+                send_line_message(msg)
+                print(f"  ✅ {name}: ส่งรายงานเช้าแล้ว")
+            else:
+                rain_alert = rain_prob >= RAIN_THRESHOLD
+                pm25_alert = pm25 >= PM25_THRESHOLD
+                if rain_alert or pm25_alert:
+                    msg = build_alert_message(name, rain_prob, pm25, level_label, advice, now)
+                    send_line_message(msg)
+                    alerted_this_session.append(name)
+                    print(f"  ✅ {name}: ส่งแจ้งเตือนแล้ว")
 
         except Exception as e:
             print(f"  ❌ {name}: error — {e}")
