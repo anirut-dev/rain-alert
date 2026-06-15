@@ -10,7 +10,7 @@ CITIES = [
     # เพิ่มเมืองได้ที่นี่
 ]
 
-RAIN_THRESHOLD = 70   # % โอกาสฝนที่จะแจ้งเตือน
+RAIN_THRESHOLD = 10   # % โอกาสฝนที่จะแจ้งเตือน
 LINE_TOKEN     = os.environ["LINE_CHANNEL_TOKEN"]
 LINE_USER_ID   = os.environ["LINE_USER_ID"]
 STATE_FILE     = "alert_state.json"
