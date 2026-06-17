@@ -102,6 +102,31 @@ def send_line_message(message):
     res.raise_for_status()
 
 
+def get_gold_prices():
+    """ดึงราคาทองคำไทย (ทองแท่ง + ทองรูปพรรณ)"""
+    try:
+        res = requests.get("https://api.chnwt.dev/thai-gold-api/latest", timeout=10)
+        res.raise_for_status()
+        price = res.json().get("response", {}).get("price", {})
+        return {
+            "bar_buy":    price.get("gold_bar", {}).get("buy",  "-"),
+            "bar_sell":   price.get("gold_bar", {}).get("sell", "-"),
+            "shape_buy":  price.get("gold",     {}).get("buy",  "-"),
+            "shape_sell": price.get("gold",     {}).get("sell", "-"),
+        }
+    except Exception as e:
+        print(f"  ⚠️ ดึงราคาทองไม่ได้: {e}")
+        return {}
+
+
+def gold_price_lines(prices):
+    return [
+        "🥇 ราคาทองคำวันนี้ (บาท/บาททอง)",
+        f"  • ทองแท่ง    ซื้อ {prices.get('bar_buy', '-')} | ขาย {prices.get('bar_sell', '-')}",
+        f"  • ทองรูปพรรณ ซื้อ {prices.get('shape_buy', '-')} | ขาย {prices.get('shape_sell', '-')}",
+    ]
+
+
 def get_fuel_prices():
     """ดึงราคาน้ำมัน PTT: E20, ดีเซล (B7), ดีเซล B20"""
     try:
@@ -128,7 +153,7 @@ def fuel_price_lines(prices):
     ]
 
 
-def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices):
+def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices):
     rain_line = f"🌧 โอกาสฝน: {rain_now}% — {'ควรพกร่ม!' if rain_now >= RAIN_THRESHOLD else 'ไม่น่ามีฝน'}"
     next_line = f"⏭ ชั่วโมงถัดไป: {rain_next}%{' ⚠️' if rain_next >= RAIN_THRESHOLD else ''}"
     lines = [
@@ -144,6 +169,9 @@ def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, n
     if fuel_prices:
         lines.append(f"{'─' * 25}")
         lines.extend(fuel_price_lines(fuel_prices))
+    if gold_prices:
+        lines.append(f"{'─' * 25}")
+        lines.extend(gold_price_lines(gold_prices))
     return "\n".join(lines)
 
 
@@ -211,6 +239,7 @@ def main():
     new_rain_state  = {}
 
     fuel_prices = get_fuel_prices() if is_morning else {}
+    gold_prices = get_gold_prices() if is_morning else {}
 
     mode = "รายงานเช้า" if is_morning else ("รายงานเย็น" if is_evening else f"รอบ {session_key}")
     print(f"[{now.strftime('%Y-%m-%d %H:%M')}] เริ่มเช็ค {len(CITIES)} เมือง ({mode})")
@@ -230,7 +259,7 @@ def main():
 
             # --- รายงานเช้า 07:00 ---
             if is_morning:
-                msg = build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices)
+                msg = build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices)
                 send_line_message(msg)
                 print(f"  ✅ {name}: ส่งรายงานเช้าแล้ว")
 
