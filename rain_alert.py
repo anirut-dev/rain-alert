@@ -1,7 +1,9 @@
 import requests
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+TZ_BANGKOK = timezone(timedelta(hours=7))
 
 # ===== CONFIG =====
 CITIES = [
@@ -42,7 +44,7 @@ def save_state(state):
 
 
 def get_session_key():
-    now = datetime.now()
+    now = datetime.now(TZ_BANGKOK)
     period = "am" if now.hour < 12 else "pm"
     return f"{now.strftime('%Y-%m-%d')}-{period}"
 
@@ -60,7 +62,7 @@ def get_weather(lat, lon):
     )
     rain_res.raise_for_status()
     hourly_rain = rain_res.json()["hourly"]["precipitation_probability"]
-    current_hour = datetime.now().hour
+    current_hour = datetime.now(TZ_BANGKOK).hour
     rain_now  = hourly_rain[current_hour]
     rain_next = hourly_rain[current_hour + 1] if current_hour < 23 else rain_now
 
@@ -101,35 +103,29 @@ def send_line_message(message):
 
 
 def get_fuel_prices():
-    """ดึงราคาน้ำมัน PTT: E20, B7 (ดีเซล), ดีเซล B20"""
+    """ดึงราคาน้ำมัน PTT: E20, ดีเซล (B7), ดีเซล B20"""
     try:
         res = requests.get("https://api.chnwt.dev/thai-oil-api/latest", timeout=10)
         res.raise_for_status()
         data = res.json()
         ptt = data.get("data", {}).get("ptt", {})
-        prices = {}
-        for item in ptt.values():
-            name = item.get("name", "")
-            price = item.get("price", "-")
-            if "E20" in name or "E20" in name.upper():
-                prices["E20"] = price
-            elif "B7" in name:
-                prices["B7"] = price
-            elif name in ("ดีเซล", "Diesel") and "B7" not in name and "B20" not in name:
-                prices["ดีเซล"] = price
-        return prices
+        return {
+            "E20":    ptt.get("gasohol_e20",  {}).get("price", "-"),
+            "B7":     ptt.get("diesel",        {}).get("price", "-"),
+            "diesel_b20": ptt.get("diesel_b20", {}).get("price", "-"),
+        }
     except Exception as e:
         print(f"  ⚠️ ดึงราคาน้ำมันไม่ได้: {e}")
         return {}
 
 
 def fuel_price_lines(prices):
-    lines = ["⛽ ราคาน้ำมัน PTT วันนี้"]
-    label_map = {"E20": "แก๊สโซฮอล์ E20", "B7": "ดีเซล B7", "ดีเซล": "ดีเซล"}
-    for key in ["E20", "ดีเซล", "B7"]:
-        if key in prices:
-            lines.append(f"  • {label_map[key]}: {prices[key]} บ./ลิตร")
-    return lines
+    return [
+        "⛽ ราคาน้ำมัน PTT วันนี้",
+        f"  • แก๊สโซฮอล์ E20 : {prices.get('E20', '-')} บ./ลิตร",
+        f"  • ดีเซล B7        : {prices.get('B7', '-')} บ./ลิตร",
+        f"  • ดีเซล B20       : {prices.get('diesel_b20', '-')} บ./ลิตร",
+    ]
 
 
 def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices):
@@ -203,7 +199,7 @@ def build_rain_cleared_message(name, rain_now, now):
 
 
 def main():
-    now = datetime.now()
+    now = datetime.now(TZ_BANGKOK)
     is_morning  = (now.hour == MORNING_HOUR)
     is_evening  = (now.hour == EVENING_HOUR)
     session_key = get_session_key()
