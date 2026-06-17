@@ -119,11 +119,27 @@ def get_gold_prices():
         return {}
 
 
-def gold_price_lines(prices):
+def gold_change_label(today_str, yesterday_str):
+    """คำนวณส่วนต่างราคาทองเทียบเมื่อวาน"""
+    try:
+        diff = float(today_str.replace(",", "")) - float(yesterday_str.replace(",", ""))
+        if diff > 0:
+            return f"▲ +{diff:,.0f}"
+        elif diff < 0:
+            return f"▼ {diff:,.0f}"
+        else:
+            return "— ไม่เปลี่ยน"
+    except Exception:
+        return ""
+
+
+def gold_price_lines(prices, prev_gold):
+    bar_change   = gold_change_label(prices.get("bar_sell", "0"),   prev_gold.get("bar_sell",   "0")) if prev_gold else ""
+    shape_change = gold_change_label(prices.get("shape_sell", "0"), prev_gold.get("shape_sell", "0")) if prev_gold else ""
     return [
         "🥇 ราคาทองคำวันนี้ (บาท/บาททอง)",
-        f"  • ทองแท่ง    ซื้อ {prices.get('bar_buy', '-')} | ขาย {prices.get('bar_sell', '-')}",
-        f"  • ทองรูปพรรณ ซื้อ {prices.get('shape_buy', '-')} | ขาย {prices.get('shape_sell', '-')}",
+        f"  • ทองแท่ง    ซื้อ {prices.get('bar_buy', '-')} | ขาย {prices.get('bar_sell', '-')} {bar_change}",
+        f"  • ทองรูปพรรณ ซื้อ {prices.get('shape_buy', '-')} | ขาย {prices.get('shape_sell', '-')} {shape_change}",
     ]
 
 
@@ -153,7 +169,7 @@ def fuel_price_lines(prices):
     ]
 
 
-def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices):
+def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices, prev_gold):
     rain_line = f"🌧 โอกาสฝน: {rain_now}% — {'ควรพกร่ม!' if rain_now >= RAIN_THRESHOLD else 'ไม่น่ามีฝน'}"
     next_line = f"⏭ ชั่วโมงถัดไป: {rain_next}%{' ⚠️' if rain_next >= RAIN_THRESHOLD else ''}"
     lines = [
@@ -171,7 +187,7 @@ def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, n
         lines.extend(fuel_price_lines(fuel_prices))
     if gold_prices:
         lines.append(f"{'─' * 25}")
-        lines.extend(gold_price_lines(gold_prices))
+        lines.extend(gold_price_lines(gold_prices, prev_gold))
     return "\n".join(lines)
 
 
@@ -240,6 +256,8 @@ def main():
 
     fuel_prices = get_fuel_prices() if is_morning else {}
     gold_prices = get_gold_prices() if is_morning else {}
+    prev_gold   = state.get("prev_gold", {})
+    today_str   = now.strftime("%Y-%m-%d")
 
     mode = "รายงานเช้า" if is_morning else ("รายงานเย็น" if is_evening else f"รอบ {session_key}")
     print(f"[{now.strftime('%Y-%m-%d %H:%M')}] เริ่มเช็ค {len(CITIES)} เมือง ({mode})")
@@ -259,7 +277,7 @@ def main():
 
             # --- รายงานเช้า 07:00 ---
             if is_morning:
-                msg = build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices)
+                msg = build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices, prev_gold)
                 send_line_message(msg)
                 print(f"  ✅ {name}: ส่งรายงานเช้าแล้ว")
 
@@ -300,9 +318,16 @@ def main():
 
     state[session_key] = alerted_this_session
     state["prev_rain"] = {**prev_rain_state, **new_rain_state}
-    keys_sorted = [k for k in sorted(state.keys(), reverse=True) if k not in ("prev_rain",)]
+
+    # บันทึกราคาทองวันนี้ไว้เปรียบเทียบพรุ่งนี้
+    if is_morning and gold_prices:
+        state["prev_gold"] = {**gold_prices, "date": today_str}
+
+    keys_sorted = [k for k in sorted(state.keys(), reverse=True) if k not in ("prev_rain", "prev_gold")]
     state = {k: state[k] for k in keys_sorted[:4]}
     state["prev_rain"] = {**prev_rain_state, **new_rain_state}
+    if is_morning and gold_prices:
+        state["prev_gold"] = {**gold_prices, "date": today_str}
     save_state(state)
 
     print("เสร็จแล้ว ✓")
