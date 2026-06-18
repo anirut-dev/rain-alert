@@ -244,28 +244,36 @@ def build_rain_cleared_message(name, rain_now, now):
 
 def main():
     now = datetime.now(TZ_BANGKOK)
-    is_morning  = (now.hour == MORNING_HOUR)
-    is_evening  = (now.hour == EVENING_HOUR)
+    today_str   = now.strftime("%Y-%m-%d")
     session_key = get_session_key()
     state = load_state()
     alerted_this_session = state.get(session_key, [])
+
+    # กันส่งซ้ำ — cron สำรองยิง 2 รอบ (07:00/07:05 และ 17:00/17:05)
+    # รายงานเช้า/เย็นจึงส่งได้วันละครั้ง รอบสำรองทำหน้าที่กันพลาดเท่านั้น
+    is_morning = (now.hour == MORNING_HOUR)
+    is_evening = (now.hour == EVENING_HOUR)
+    do_morning = is_morning and state.get("morning_done") != today_str
+    do_evening = is_evening and state.get("evening_done") != today_str
 
     # เก็บ state ฝนรอบก่อนสำหรับตรวจสอบ "ฝนหยุด"
     prev_rain_state = state.get("prev_rain", {})
     new_rain_state  = {}
 
-    fuel_prices = get_fuel_prices() if is_morning else {}
-    gold_prices = get_gold_prices() if is_morning else {}
+    fuel_prices = get_fuel_prices() if do_morning else {}
+    gold_prices = get_gold_prices() if do_morning else {}
     prev_gold   = state.get("prev_gold", {})
-    today_str   = now.strftime("%Y-%m-%d")
 
-    mode = "รายงานเช้า" if is_morning else ("รายงานเย็น" if is_evening else f"รอบ {session_key}")
+    morning_sent = False
+    evening_sent = False
+
+    mode = "รายงานเช้า" if do_morning else ("รายงานเย็น" if do_evening else f"รอบ {session_key}")
     print(f"[{now.strftime('%Y-%m-%d %H:%M')}] เริ่มเช็ค {len(CITIES)} เมือง ({mode})")
 
     for city in CITIES:
         name = city["name"]
 
-        if not is_morning and not is_evening and name in alerted_this_session:
+        if not do_morning and not do_evening and name in alerted_this_session:
             print(f"  ⏭ {name}: แจ้งไปแล้วในรอบนี้ ข้าม")
             continue
 
@@ -276,15 +284,17 @@ def main():
             print(f"  🌦 {name}: ฝนตอนนี้ {rain_now}% | ชั่วโมงหน้า {rain_next}% | PM2.5 {pm25} µg/m³")
 
             # --- รายงานเช้า 07:00 ---
-            if is_morning:
+            if do_morning:
                 msg = build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices, prev_gold)
                 send_line_message(msg)
+                morning_sent = True
                 print(f"  ✅ {name}: ส่งรายงานเช้าแล้ว")
 
             # --- รายงานเย็น 17:00 ---
-            elif is_evening:
+            elif do_evening:
                 msg = build_evening_report(name, rain_now, rain_next, pm25, level_label, advice, now)
                 send_line_message(msg)
+                evening_sent = True
                 print(f"  ✅ {name}: ส่งรายงานเย็นแล้ว")
 
             else:
@@ -316,18 +326,25 @@ def main():
         except Exception as e:
             print(f"  ❌ {name}: error — {e}")
 
+    # อัปเดต state
     state[session_key] = alerted_this_session
+
+    # ตัดเหลือ 4 รอบล่าสุด (กันไฟล์บวม) — คีย์พิเศษเก็บไว้เสมอ
+    SPECIAL = ("prev_rain", "prev_gold", "morning_done", "evening_done")
+    session_keys = sorted((k for k in state if k not in SPECIAL), reverse=True)
+    keep = set(session_keys[:4])
+    state = {k: v for k, v in state.items() if k in keep or k in SPECIAL}
+
     state["prev_rain"] = {**prev_rain_state, **new_rain_state}
 
-    # บันทึกราคาทองวันนี้ไว้เปรียบเทียบพรุ่งนี้
-    if is_morning and gold_prices:
-        state["prev_gold"] = {**gold_prices, "date": today_str}
+    # บันทึกว่าวันนี้ส่งรายงานเช้า/เย็นแล้ว (กันรอบสำรองส่งซ้ำ)
+    if do_morning and morning_sent:
+        state["morning_done"] = today_str
+        if gold_prices:  # เก็บราคาทองวันนี้ไว้เทียบพรุ่งนี้
+            state["prev_gold"] = {**gold_prices, "date": today_str}
+    if do_evening and evening_sent:
+        state["evening_done"] = today_str
 
-    keys_sorted = [k for k in sorted(state.keys(), reverse=True) if k not in ("prev_rain", "prev_gold")]
-    state = {k: state[k] for k in keys_sorted[:4]}
-    state["prev_rain"] = {**prev_rain_state, **new_rain_state}
-    if is_morning and gold_prices:
-        state["prev_gold"] = {**gold_prices, "date": today_str}
     save_state(state)
 
     print("เสร็จแล้ว ✓")
