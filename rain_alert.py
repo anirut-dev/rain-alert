@@ -251,6 +251,8 @@ def main():
     do_morning = in_morning_window and state.get("morning_done") != today_str
     do_evening = in_evening_window and state.get("evening_done") != today_str
 
+    do_morning = True  # TEMP TEST: บังคับส่งรายงานเช้าเพื่อทดสอบ — ลบบรรทัดนี้หลังเทสต์
+
     fuel_prices = get_fuel_prices() if do_morning else {}
     gold_prices = get_gold_prices() if do_morning else {}
 
