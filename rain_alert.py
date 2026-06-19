@@ -16,6 +16,8 @@ RAIN_CLEAR_THRESHOLD = 30   # % ถือว่าฝนหยุดแล้ว
 PM25_THRESHOLD       = 50   # µg/m³
 MORNING_HOUR         = 7    # รายงานเช้า
 EVENING_HOUR         = 17   # รายงานขากลับ
+ACTIVE_START         = 6    # แจ้งเตือนรายชั่วโมงตั้งแต่ 06:00
+ACTIVE_END           = 21   # ถึง 21:00 (กันเด้งกลางดึก)
 LINE_TOKEN           = os.environ["LINE_CHANNEL_TOKEN"]
 LINE_USER_ID         = os.environ["LINE_USER_ID"]
 STATE_FILE           = "alert_state.json"
@@ -296,6 +298,10 @@ def main():
                 send_line_message(msg)
                 evening_sent = True
                 print(f"  ✅ {name}: ส่งรายงานเย็นแล้ว")
+
+            # แจ้งเตือนรายชั่วโมงเฉพาะช่วงกลางวัน (state ฝนยังอัปเดตตลอด)
+            elif not (ACTIVE_START <= now.hour <= ACTIVE_END):
+                print(f"  💤 {name}: นอกเวลาแจ้งเตือน ({now.strftime('%H:%M')}) ข้าม")
 
             else:
                 sent = False
