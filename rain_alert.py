@@ -12,7 +12,6 @@ CITIES = [
 ]
 
 RAIN_THRESHOLD       = 70   # % แจ้งเตือนฝน
-RAIN_CLEAR_THRESHOLD = 30   # % ถือว่าฝนหยุดแล้ว
 PM25_THRESHOLD       = 50   # µg/m³
 MORNING_HOUR         = 7    # รายงานเช้า
 EVENING_HOUR         = 17   # รายงานขากลับ
@@ -234,16 +233,6 @@ def build_incoming_rain_message(name, rain_next, now):
     )
 
 
-def build_rain_cleared_message(name, rain_now, now):
-    """แจ้งเมื่อฝนหยุดแล้ว"""
-    return (
-        f"☀️ ฝนหยุดแล้ว — {name}\n"
-        f"⏰ {now.strftime('%H:%M')} น.\n"
-        f"💧 โอกาสฝนลดเหลือ: {rain_now}%\n"
-        f"ออกไปข้างนอกได้แล้วครับ!"
-    )
-
-
 def main():
     now = datetime.now(TZ_BANGKOK)
     today_str   = now.strftime("%Y-%m-%d")
@@ -251,16 +240,12 @@ def main():
     state = load_state()
     alerted_this_session = state.get(session_key, [])
 
-    # กันส่งซ้ำ — cron สำรองยิง 2 รอบ (07:00/07:05 และ 17:00/17:05)
-    # รายงานเช้า/เย็นจึงส่งได้วันละครั้ง รอบสำรองทำหน้าที่กันพลาดเท่านั้น
-    is_morning = (now.hour == MORNING_HOUR)
-    is_evening = (now.hour == EVENING_HOUR)
-    do_morning = is_morning and state.get("morning_done") != today_str
-    do_evening = is_evening and state.get("evening_done") != today_str
-
-    # เก็บ state ฝนรอบก่อนสำหรับตรวจสอบ "ฝนหยุด"
-    prev_rain_state = state.get("prev_rain", {})
-    new_rain_state  = {}
+    # GitHub Actions มักข้ามรอบ cron ต้นชั่วโมง จึงไม่เช็คชั่วโมงเป๊ะ
+    # แต่ยิงรายงานในรอบแรกที่เจอภายในช่วงเวลา แล้วกันส่งซ้ำด้วย morning_done/evening_done
+    in_morning_window = MORNING_HOUR <= now.hour < 12
+    in_evening_window = EVENING_HOUR <= now.hour < 22
+    do_morning = in_morning_window and state.get("morning_done") != today_str
+    do_evening = in_evening_window and state.get("evening_done") != today_str
 
     fuel_prices = get_fuel_prices() if do_morning else {}
     gold_prices = get_gold_prices() if do_morning else {}
@@ -282,10 +267,9 @@ def main():
         try:
             rain_now, rain_next, pm25 = get_weather(city["lat"], city["lon"])
             level_label, advice = pm25_label(pm25)
-            new_rain_state[name] = rain_now
             print(f"  🌦 {name}: ฝนตอนนี้ {rain_now}% | ชั่วโมงหน้า {rain_next}% | PM2.5 {pm25} µg/m³")
 
-            # --- รายงานเช้า 07:00 ---
+            # --- รายงานเช้า ---
             if do_morning:
                 msg = build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices, prev_gold)
                 send_line_message(msg)
@@ -304,30 +288,19 @@ def main():
                 print(f"  💤 {name}: นอกเวลาแจ้งเตือน ({now.strftime('%H:%M')}) ข้าม")
 
             else:
-                sent = False
-
                 # แจ้งเตือนฉุกเฉิน (ฝนหรือ PM2.5 เกิน threshold)
                 if rain_now >= RAIN_THRESHOLD or pm25 >= PM25_THRESHOLD:
                     msg = build_alert_message(name, rain_now, rain_next, pm25, level_label, advice, now)
                     send_line_message(msg)
                     alerted_this_session.append(name)
-                    sent = True
                     print(f"  ✅ {name}: ส่งแจ้งเตือนฉุกเฉินแล้ว")
 
                 # แจ้งล่วงหน้า: ตอนนี้ยังไม่มีฝน แต่ชั่วโมงหน้าจะมี
-                elif rain_next >= RAIN_THRESHOLD and rain_now < RAIN_THRESHOLD and not sent:
+                elif rain_next >= RAIN_THRESHOLD and rain_now < RAIN_THRESHOLD:
                     msg = build_incoming_rain_message(name, rain_next, now)
                     send_line_message(msg)
                     alerted_this_session.append(name)
-                    sent = True
                     print(f"  ✅ {name}: ส่งแจ้งเตือนล่วงหน้าแล้ว")
-
-                # แจ้งฝนหยุด: รอบก่อนฝน > 70% แต่ตอนนี้ลดลงต่ำกว่า 30%
-                prev_rain = prev_rain_state.get(name, 0)
-                if prev_rain >= RAIN_THRESHOLD and rain_now < RAIN_CLEAR_THRESHOLD and not sent:
-                    msg = build_rain_cleared_message(name, rain_now, now)
-                    send_line_message(msg)
-                    print(f"  ✅ {name}: ส่งแจ้งฝนหยุดแล้ว")
 
         except Exception as e:
             print(f"  ❌ {name}: error — {e}")
@@ -336,12 +309,10 @@ def main():
     state[session_key] = alerted_this_session
 
     # ตัดเหลือ 4 รอบล่าสุด (กันไฟล์บวม) — คีย์พิเศษเก็บไว้เสมอ
-    SPECIAL = ("prev_rain", "prev_gold", "morning_done", "evening_done")
+    SPECIAL = ("prev_gold", "morning_done", "evening_done")
     session_keys = sorted((k for k in state if k not in SPECIAL), reverse=True)
     keep = set(session_keys[:4])
     state = {k: v for k, v in state.items() if k in keep or k in SPECIAL}
-
-    state["prev_rain"] = {**prev_rain_state, **new_rain_state}
 
     # บันทึกว่าวันนี้ส่งรายงานเช้า/เย็นแล้ว (กันรอบสำรองส่งซ้ำ)
     if do_morning and morning_sent:
