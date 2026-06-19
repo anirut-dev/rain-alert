@@ -104,43 +104,47 @@ def send_line_message(message):
 
 
 def get_gold_prices():
-    """ดึงราคาทองคำไทย (ทองแท่ง + ทองรูปพรรณ)"""
+    """ดึงราคาทองคำไทย 96.5% จาก thaigold.info (มีราคาเปลี่ยนแปลงวันนี้ในตัว)"""
     try:
-        res = requests.get("https://api.chnwt.dev/thai-gold-api/latest", timeout=10)
+        res = requests.get("https://www.thaigold.info/RealTimeDataV2/gtdata_.txt", timeout=10)
         res.raise_for_status()
-        price = res.json().get("response", {}).get("price", {})
+        rows = {r.get("name"): r for r in res.json()}
+        bar = rows.get("สมาคมฯ", {})   # ทองคำแท่ง 96.5% (ราคาสมาคมค้าทองคำ)
         return {
-            "bar_buy":    price.get("gold_bar", {}).get("buy",  "-"),
-            "bar_sell":   price.get("gold_bar", {}).get("sell", "-"),
-            "shape_buy":  price.get("gold",     {}).get("buy",  "-"),
-            "shape_sell": price.get("gold",     {}).get("sell", "-"),
+            "bar_buy":  str(bar.get("bid", "-")),   # รับซื้อ
+            "bar_sell": str(bar.get("ask", "-")),   # ขายออก
+            "diff":     bar.get("diff", ""),         # เปลี่ยนแปลงจากเมื่อวาน
         }
     except Exception as e:
         print(f"  ⚠️ ดึงราคาทองไม่ได้: {e}")
         return {}
 
 
-def gold_change_label(today_str, yesterday_str):
-    """คำนวณส่วนต่างราคาทองเทียบเมื่อวาน"""
+def gold_change_label(diff):
+    """แปลงค่า diff ของ thaigold.info เป็นข้อความขึ้น/ลง"""
     try:
-        diff = float(today_str.replace(",", "")) - float(yesterday_str.replace(",", ""))
-        if diff > 0:
-            return f"▲ +{diff:,.0f}"
-        elif diff < 0:
-            return f"▼ {diff:,.0f}"
+        d = float(str(diff).replace(",", "").replace("+", ""))
+        if d > 0:
+            return f"▲ +{d:,.0f}"
+        elif d < 0:
+            return f"▼ {d:,.0f}"
         else:
             return "— ไม่เปลี่ยน"
     except Exception:
         return ""
 
 
-def gold_price_lines(prices, prev_gold):
-    bar_change   = gold_change_label(prices.get("bar_sell", "0"),   prev_gold.get("bar_sell",   "0")) if prev_gold else ""
-    shape_change = gold_change_label(prices.get("shape_sell", "0"), prev_gold.get("shape_sell", "0")) if prev_gold else ""
+def gold_price_lines(prices):
+    change = gold_change_label(prices.get("diff", ""))
+    # ทองรูปพรรณขายออก = ทองแท่งขายออก + 500 (มาตรฐานราคาไทย)
+    try:
+        shape_sell = f"{float(prices.get('bar_sell','0').replace(',','')) + 500:,.0f}"
+    except Exception:
+        shape_sell = "-"
     return [
-        "🥇 ราคาทองคำวันนี้ (บาท/บาททอง)",
-        f"  • ทองแท่ง    ซื้อ {prices.get('bar_buy', '-')} | ขาย {prices.get('bar_sell', '-')} {bar_change}",
-        f"  • ทองรูปพรรณ ซื้อ {prices.get('shape_buy', '-')} | ขาย {prices.get('shape_sell', '-')} {shape_change}",
+        "🥇 ราคาทองคำ 96.5% วันนี้ (บาท)",
+        f"  • ทองแท่ง    รับซื้อ {prices.get('bar_buy', '-')} | ขายออก {prices.get('bar_sell', '-')}  {change}",
+        f"  • ทองรูปพรรณ ขายออก {shape_sell}",
     ]
 
 
@@ -150,7 +154,7 @@ def get_fuel_prices():
         res = requests.get("https://api.chnwt.dev/thai-oil-api/latest", timeout=10)
         res.raise_for_status()
         data = res.json()
-        ptt = data.get("data", {}).get("ptt", {})
+        ptt = data.get("response", {}).get("stations", {}).get("ptt", {})
         return {
             "E20":    ptt.get("gasohol_e20",  {}).get("price", "-"),
             "B7":     ptt.get("diesel",        {}).get("price", "-"),
@@ -170,7 +174,7 @@ def fuel_price_lines(prices):
     ]
 
 
-def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices, prev_gold):
+def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices):
     rain_line = f"🌧 โอกาสฝน: {rain_now}% — {'ควรพกร่ม!' if rain_now >= RAIN_THRESHOLD else 'ไม่น่ามีฝน'}"
     next_line = f"⏭ ชั่วโมงถัดไป: {rain_next}%{' ⚠️' if rain_next >= RAIN_THRESHOLD else ''}"
     lines = [
@@ -188,7 +192,7 @@ def build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, n
         lines.extend(fuel_price_lines(fuel_prices))
     if gold_prices:
         lines.append(f"{'─' * 25}")
-        lines.extend(gold_price_lines(gold_prices, prev_gold))
+        lines.extend(gold_price_lines(gold_prices))
     return "\n".join(lines)
 
 
@@ -249,7 +253,6 @@ def main():
 
     fuel_prices = get_fuel_prices() if do_morning else {}
     gold_prices = get_gold_prices() if do_morning else {}
-    prev_gold   = state.get("prev_gold", {})
 
     morning_sent = False
     evening_sent = False
@@ -271,7 +274,7 @@ def main():
 
             # --- รายงานเช้า ---
             if do_morning:
-                msg = build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices, prev_gold)
+                msg = build_morning_report(name, rain_now, rain_next, pm25, level_label, advice, now, fuel_prices, gold_prices)
                 send_line_message(msg)
                 morning_sent = True
                 print(f"  ✅ {name}: ส่งรายงานเช้าแล้ว")
@@ -309,7 +312,7 @@ def main():
     state[session_key] = alerted_this_session
 
     # ตัดเหลือ 4 รอบล่าสุด (กันไฟล์บวม) — คีย์พิเศษเก็บไว้เสมอ
-    SPECIAL = ("prev_gold", "morning_done", "evening_done")
+    SPECIAL = ("morning_done", "evening_done")
     session_keys = sorted((k for k in state if k not in SPECIAL), reverse=True)
     keep = set(session_keys[:4])
     state = {k: v for k, v in state.items() if k in keep or k in SPECIAL}
@@ -317,8 +320,6 @@ def main():
     # บันทึกว่าวันนี้ส่งรายงานเช้า/เย็นแล้ว (กันรอบสำรองส่งซ้ำ)
     if do_morning and morning_sent:
         state["morning_done"] = today_str
-        if gold_prices:  # เก็บราคาทองวันนี้ไว้เทียบพรุ่งนี้
-            state["prev_gold"] = {**gold_prices, "date": today_str}
     if do_evening and evening_sent:
         state["evening_done"] = today_str
 
